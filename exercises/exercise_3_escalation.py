@@ -11,9 +11,11 @@ import uuid
 
 from dotenv import load_dotenv
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 from common.github import fetch_pr, post_review_comment
@@ -27,6 +29,12 @@ from common.schemas import (
 
 
 console = Console()
+
+# Allow-list the Pydantic models stored in graph state, so restoring a
+# checkpoint doesn't rely on LangGraph's permissive (soon blocked) default.
+CHECKPOINT_SERDE = JsonPlusSerializer(
+    allowed_msgpack_modules=[("common.schemas", "PRAnalysis"), ("common.schemas", "ReviewComment")],
+)
 
 
 def node_fetch_pr(state):
@@ -194,14 +202,14 @@ def build_graph():
     g.add_edge("commit", END)
     g.add_edge("escalate", "synthesize")
     g.add_edge("synthesize", "commit")
-    return g.compile(checkpointer=MemorySaver())
+    return g.compile(checkpointer=MemorySaver(serde=CHECKPOINT_SERDE))
 
 
 def handle_interrupt(payload):
     kind = payload["kind"]
     if kind == "approval_request":
         console.print(Panel.fit(
-            payload["summary"],
+            escape(payload["summary"]),
             title=f"Approve? conf={payload['confidence']:.0%}",
             border_style="green",
         ))
@@ -209,11 +217,11 @@ def handle_interrupt(payload):
         return {"choice": choice, "feedback": console.input("Feedback: ").strip()}
     if kind == "escalation":
         console.print(Panel.fit(
-            payload["summary"],
+            escape(payload["summary"]),
             title=f"Escalation conf={payload['confidence']:.0%}",
             border_style="yellow",
         ))
-        return {q: console.input(f"Q: {q}\nA: ").strip() for q in payload["questions"]}
+        return {q: console.input(escape(f"Q: {q}\nA: ")).strip() for q in payload["questions"]}
     raise ValueError(kind)
 
 

@@ -153,6 +153,7 @@ def build_graph(checkpointer):
     g.add_edge("collect", "synthesize")
     g.add_edge("synthesize", "commit")
     g.add_edge("commit", END)
+    checkpointer.serde = ex4.CHECKPOINT_SERDE
     return g.compile(checkpointer=checkpointer)
 
 

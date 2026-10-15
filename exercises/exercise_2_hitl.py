@@ -12,9 +12,11 @@ import uuid
 
 from dotenv import load_dotenv
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 from common.github import fetch_pr, post_review_comment
@@ -28,6 +30,12 @@ from common.schemas import (
 
 
 console = Console()
+
+# Allow-list the Pydantic models stored in graph state, so restoring a
+# checkpoint doesn't rely on LangGraph's permissive (soon blocked) default.
+CHECKPOINT_SERDE = JsonPlusSerializer(
+    allowed_msgpack_modules=[("common.schemas", "PRAnalysis"), ("common.schemas", "ReviewComment")],
+)
 
 
 def node_fetch_pr(state: ReviewState) -> dict:
@@ -136,22 +144,23 @@ def build_graph():
     g.add_edge("human_approval", "commit")
     g.add_edge("commit", END)
     g.add_edge("escalate", END)
-    return g.compile(checkpointer=MemorySaver())
+    return g.compile(checkpointer=MemorySaver(serde=CHECKPOINT_SERDE))
 
 
 def prompt_human(payload: dict) -> dict:
+    # LLM text and diffs can contain "[...]", which Rich would parse as markup.
     console.print(Panel.fit(
         f"[bold]Confidence:[/bold] {payload['confidence']:.0%}\n"
-        f"[dim]{payload['confidence_reasoning']}[/dim]\n\n"
-        f"[bold]Summary:[/bold] {payload['summary']}",
+        f"[dim]{escape(payload['confidence_reasoning'])}[/dim]\n\n"
+        f"[bold]Summary:[/bold] {escape(payload['summary'])}",
         title="Approval request",
         border_style="green",
     ))
     for c in payload.get("comments", []):
-        console.print(f"  [{c['severity']}] {c['file']}:{c.get('line') or '?'} — {c['body']}")
+        console.print(escape(f"  [{c['severity']}] {c['file']}:{c.get('line') or '?'} — {c['body']}"))
     if payload.get("diff_preview"):
         console.print("\n[dim]--- diff preview ---[/dim]")
-        console.print(payload["diff_preview"])
+        console.print(payload["diff_preview"], markup=False, highlight=False)
 
     choice = ""
     while choice not in {"approve", "reject", "edit"}:

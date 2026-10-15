@@ -32,10 +32,12 @@ import time
 import uuid
 
 from dotenv import load_dotenv
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 from common.db import db_conn, db_path, write_audit_event
@@ -53,6 +55,12 @@ from common.schemas import (
 
 console = Console()
 AGENT_ID = "pr-review-agent@v0.1"
+
+# Allow-list the Pydantic models stored in graph state, so restoring a
+# checkpoint doesn't rely on LangGraph's permissive (soon blocked) default.
+CHECKPOINT_SERDE = JsonPlusSerializer(
+    allowed_msgpack_modules=[("common.schemas", "PRAnalysis"), ("common.schemas", "ReviewComment")],
+)
 
 
 async def audit(state, entry: AuditEntry) -> None:
@@ -408,6 +416,8 @@ def build_graph(checkpointer, interrupt_before=None):
     g.add_edge("commit", END)
     g.add_edge("escalate", "synthesize")
     g.add_edge("synthesize", "commit")
+    # AsyncSqliteSaver.from_conn_string() takes no serde argument, so set it here.
+    checkpointer.serde = CHECKPOINT_SERDE
     return g.compile(checkpointer=checkpointer, interrupt_before=interrupt_before)
 
 
@@ -415,11 +425,11 @@ def handle_interrupt(payload):
     kind = payload["kind"]
     if kind == "approval_request":
         console.print(Panel.fit(
-            payload["summary"], title=f"conf={payload['confidence']:.0%}", border_style="green",
+            escape(payload["summary"]), title=f"conf={payload['confidence']:.0%}", border_style="green",
         ))
         choice = console.input("approve/reject/edit? ").strip().lower()
         return {"choice": choice, "feedback": console.input("Feedback: ").strip()}
-    return {q: console.input(f"Q: {q}\nA: ").strip() for q in payload["questions"]}
+    return {q: console.input(escape(f"Q: {q}\nA: ")).strip() for q in payload["questions"]}
 
 
 async def run(pr_url: str, thread_id: str | None):
