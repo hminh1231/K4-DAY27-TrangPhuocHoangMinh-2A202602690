@@ -91,6 +91,10 @@ Thresholds live in `common/schemas.py` (`AUTO_APPROVE_THRESHOLD = 0.73`, `ESCALA
 │   ├── exercise_3_escalation.py
 │   └── exercise_4_audit.py
 │
+├── app.py                   # Exercise 5 — Streamlit approval UI
+│
+├── bonus/                   # bonus challenges (time-travel, calibration, fan-out)
+│
 └── audit/                   # provided
     ├── schema.sql           # CREATE TABLE audit_events
     └── replay.py            # `python -m audit.replay --thread <id>` / --list
@@ -284,6 +288,22 @@ The skeleton wires up the Streamlit boilerplate (session state, page layout, top
 2. **Confidence calibration.** After N sessions, query `audit_events` to compute `AVG(confidence)` vs `count(human_choice = 'approve')`. Is the model over- or under-confident?
 3. **Multi-reviewer fan-out.** Use the `Send` API to escalate the same questions to two reviewers (two threads) and wait for both.
 4. **Auto-edit.** When the human chooses `edit`, call the LLM again to rewrite the review using `human_feedback`, then commit.
+
+### Solutions
+
+The bonus scripts live in `bonus/` and reuse the exercise 4 nodes. They run in **dry-run** mode by default: the comment is printed instead of posted, so experiments don't spam the demo PRs. Pass `--post` to really post.
+
+| # | Where | Run |
+|---|-------|-----|
+| 1 | `bonus/time_travel.py` | `uv run python -m bonus.time_travel --pr <url> --answer-a approve --answer-b "edit:Drop the nits"` (or `--thread <id>` to fork an existing session) |
+| 2 | `bonus/calibration.py` | `uv run python -m bonus.calibration [--edit-credit 0.5]` |
+| 3 | `bonus/fan_out.py` | `uv run python -m bonus.fan_out --pr https://github.com/VinUni-AI20k/PR-Demo/pull/2 --reviewers alice,bob` |
+| 4 | `node_auto_edit` in `exercises/exercise_4_audit.py` | built into the main graph, so it works from the CLI and from `app.py` |
+
+1. **Time-travel** lists `aget_state_history()`, then picks the checkpoint paused at the HITL node and forks it with `aupdate_state(cfg, ..., as_node="route")`. Calling `ainvoke(Command(resume=B), old_cfg)` directly would **not** work: the old checkpoint still holds answer A as a pending write, so LangGraph just replays A. Both branches start from the same LLM review and are printed side by side.
+2. **Calibration** compares `AVG(confidence)` with the approve rate over all `human_approval` decisions, then prints a per-bin reliability table, the Brier score, ECE, the routing mix, and how much escalation answers moved confidence.
+3. **Fan-out**: `route` returns one `Send("ask_reviewer", ...)` per reviewer. Each branch calls `interrupt()`, and a reducer merges the answers. `collect` runs only after **every** reviewer has answered. The CLI resumes one reviewer at a time with `Command(resume={interrupt_id: answers})` to show the graph waiting. Each reviewer gets their own audit rows (`reviewer_id`).
+4. **Auto-edit**: `human_approval` routes `edit` to `auto_edit`, which re-prompts the LLM with the original review, the reviewer's feedback and the diff, then goes to `commit`, which posts the rewritten review.
 
 ## FAQ / gotchas
 
